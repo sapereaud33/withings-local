@@ -271,18 +271,32 @@ class RfcommWppSession(WppConversation):
 
 
 class SppWppSession(RfcommWppSession):
-    """Plain WPP on a Classic serial-port (SPP) link that we opened (Body+: the host connects).
+    """WPP on a Classic serial-port (SPP) link that we opened (Body+: the host connects).
 
-    No FragFsm here: on 2026-11-19 a Body+ ignored a FragFsm RESET and a FragFsm-framed PROBE
-    on its SPP channel (0 bytes back in 15 s), consistent with a parser reading `01 00 ...` as a
-    WPP header and waiting for its length. Messages go out as encoded and the reply stream is fed
-    straight to the WPP reassembler.
+    Seen on a Body+ (2026-11-19): woken with the button, it sends a FragFsm RESET (`01 00`)
+    right after the RFCOMM link opens and ignores unframed WPP; after a weigh-in it sometimes
+    sends nothing at all. So wait briefly for the scale's RESET: if it comes, frame everything
+    with FragFsm; if not, fall back to plain WPP. We never send a RESET of our own.
     """
+
+    RESET_WAIT = 2.5
+
+    def __init__(self, sock: socket.socket, trace=None, *, sync_ok: bool = False) -> None:
+        super().__init__(sock, trace, sync_ok=sync_ok)
+        self.framed = False
 
     async def start(self) -> None:
         if self._reader_task is not None:
             raise RuntimeError("RFCOMM reader already started")
         self._reader_task = asyncio.create_task(self._receive())
+        try:
+            async with asyncio.timeout(self.RESET_WAIT):
+                await self._until_disconnect(self._reset_received.wait(), "waiting for FragFsm RESET")
+        except TimeoutError:
+            _LOGGER.debug("no FragFsm RESET within %.1fs; using plain WPP", self.RESET_WAIT)
+            return
+        _LOGGER.debug("FragFsm RESET received; framing WPP")
+        await asyncio.sleep(FRAGFSM_SETTLE_SECONDS)
 
     async def _receive(self) -> None:
         try:
@@ -290,17 +304,27 @@ class SppWppSession(RfcommWppSession):
                 if not self.rx_bytes:
                     # Framing header only (at most 4 bytes), never payload.
                     _LOGGER.debug("SPP first bytes: %s", chunk[:4].hex(" "))
+                    if chunk[:2] == b"\x01\x00":
+                        self.framed = True
                 self.rx_bytes += len(chunk)
                 self.rx_chunks += 1
-                self._on_notify(None, bytearray(chunk))
+                if not self.framed:
+                    self._on_notify(None, bytearray(chunk))
+                    continue
+                for payload in self._fragfsm.feed(chunk):
+                    if payload is None:
+                        self._reset_received.set()
+                    else:
+                        self._on_notify(None, bytearray(payload))
         except (OSError, WppError):
             _LOGGER.debug("SPP stream ended unexpectedly", exc_info=True)
         finally:
             self.mark_disconnected()
 
     async def _write(self, raw: bytes) -> None:
-        await asyncio.get_running_loop().sock_sendall(self._sock, raw)
-        self.tx_bytes += len(raw)
+        packet = fragfsm_frame(raw) if self.framed else raw
+        await asyncio.get_running_loop().sock_sendall(self._sock, packet)
+        self.tx_bytes += len(packet)
 
 
 class ScaleClient:

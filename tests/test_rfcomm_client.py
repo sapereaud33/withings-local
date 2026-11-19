@@ -183,7 +183,7 @@ async def test_rfcomm_uses_verified_wpp_authentication_before_reading(knows_key:
 
 
 async def test_spp_session_speaks_plain_wpp() -> None:
-    """Body+ SPP: no FragFsm RESET or headers; replies may arrive split across reads."""
+    """Body+ SPP without a RESET from the scale: plain WPP; replies may arrive split."""
     from withings_wpp.client import SppWppSession
 
     local, peer = socket.socketpair()
@@ -191,6 +191,7 @@ async def test_spp_session_speaks_plain_wpp() -> None:
     peer.setblocking(False)
     loop = asyncio.get_running_loop()
     session = SppWppSession(local, sync_ok=True)
+    session.RESET_WAIT = 0.05
     try:
         await asyncio.wait_for(session.start(), 1)
         request = asyncio.create_task(ScaleClient(session).battery())
@@ -202,6 +203,30 @@ async def test_spp_session_speaks_plain_wpp() -> None:
         await loop.sock_sendall(peer, reply[3:])
         assert await asyncio.wait_for(request, 1) == 81
         assert session.tx_bytes == len(data)
+    finally:
+        await session.close()
+        peer.close()
+
+
+async def test_spp_session_frames_after_the_scale_resets() -> None:
+    """Body+ SPP woken with the button: the scale sends RESET, then FragFsm-framed WPP."""
+    from withings_wpp.client import SppWppSession
+
+    local, peer = socket.socketpair()
+    local.setblocking(False)
+    peer.setblocking(False)
+    loop = asyncio.get_running_loop()
+    session = SppWppSession(local, sync_ok=True)
+    try:
+        await loop.sock_sendall(peer, b"\x01\x00")
+        await asyncio.wait_for(session.start(), 1)
+        assert session.framed
+        request = asyncio.create_task(ScaleClient(session).battery())
+        data = await asyncio.wait_for(loop.sock_recv(peer, 128), 1)
+        assert decode_message(FragFsmReassembler().feed(data)[0]).command == Cmd.BATTERY_PERCENT
+        reply = Message(Cmd.BATTERY_PERCENT, (Tlv(Obj.BATTERY_PERCENT, struct.pack(">H", 64)),)).encode()
+        await loop.sock_sendall(peer, frame(reply))
+        assert await asyncio.wait_for(request, 1) == 64
     finally:
         await session.close()
         peer.close()
