@@ -11,6 +11,11 @@ SMP random exchange (openwithings, docs/bluez-pitfalls.md #5). So instead of Pai
 3. connects and runs a setup-mode WPP session; the subscription triggers the pairing,
 4. restores the adapter settings and checks that BlueZ stored the bond.
 
+The scale's advertising flags don't say "LE only" and it also offers a Classic serial port, so
+BlueZ treats it as dual-mode and Device1.Connect() pages it over BR/EDR, which times out
+(pitfall #1). BlueZ 5.81+ has a per-device PreferredBearer property: `prefer_le` sets it to "le"
+before every connection. Older BlueZ lacks it; then the connection may still go out over BR/EDR.
+
 The supervision-timeout problem openwithings hit on a Raspberry Pi (pitfalls #6, #7) doesn't
 apply: Home Assistant loads 10 s / 8 s connection parameters for every connection it makes.
 """
@@ -41,6 +46,23 @@ PROPERTIES = "org.freedesktop.DBus.Properties"
 AGENT_MANAGER = "org.bluez.AgentManager1"
 SESSION_TIMEOUT = 45
 PAIRABLE_FAILSAFE_SECONDS = SESSION_TIMEOUT + 30
+
+
+async def prefer_le(device_path: str) -> None:
+    """Make BlueZ connect to the scale over LE (see module docstring). Best effort."""
+    bus = await MessageBus(bus_type=BusType.SYSTEM, negotiate_unix_fd=False).connect()
+    try:
+        reply = await asyncio.wait_for(
+            bus.call(Message(destination=BLUEZ, path=device_path, interface=PROPERTIES, member="Set",
+                             signature="ssv", body=[DEVICE, "PreferredBearer", Variant("s", "le")])),
+            timeout=5,
+        )
+        if reply.message_type == MessageType.ERROR:
+            _LOGGER.debug("could not set PreferredBearer=le on %s: %s", device_path, reply.error_name)
+    except Exception:  # noqa: BLE001 - best effort
+        _LOGGER.debug("could not set PreferredBearer=le on %s", device_path, exc_info=True)
+    finally:
+        bus.disconnect()
 
 
 class BodyPlusPairing:
@@ -98,6 +120,7 @@ class BodyPlusPairing:
                 timeout_before = await self._get(bus, self.adapter_path, ADAPTER, "PairableTimeout")
                 await self._set(bus, self.adapter_path, ADAPTER, "PairableTimeout", PAIRABLE_FAILSAFE_SECONDS)
                 await self._set(bus, self.adapter_path, ADAPTER, "Pairable", True)
+            await prefer_le(self.device_path)
             await self._run_setup_session()
             for _ in range(20):
                 if await self._paired(bus):

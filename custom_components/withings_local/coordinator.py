@@ -38,6 +38,8 @@ from .const import (
     POLL_COOLDOWN_SECONDS,
     SESSION_TIMEOUT_SECONDS,
 )
+from .le_pairing import prefer_le
+from .pairing import PairingUnsupported, device_path
 from .rfcomm import Wbs06RfcommServer
 
 _LOGGER = logging.getLogger(__name__)
@@ -311,6 +313,11 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
                 device or service_info.device
             )
 
+        if self.model_id == BODY_PLUS_MODEL_ID:
+            try:
+                await prefer_le(device_path(self.hass, service_info))
+            except PairingUnsupported:
+                pass  # a proxy: no BlueZ device object to configure
         try:
             client = await establish_connection(
                 BleakClientWithServiceCache,
