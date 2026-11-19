@@ -26,6 +26,11 @@ _LOGGER = logging.getLogger(__name__)
 BLUEZ = "org.bluez"
 SPP_UUID = "00001101-0000-1000-8000-00805f9b34fb"
 CONNECT_TIMEOUT = 25
+# The scale answers the first page right after a weigh-in with "Connection Rejected due to
+# Limited Resources" (HCI 0x0d, seen 2026-11-19) while it keeps advertising for ~13 s, so keep
+# paging it for a while instead of giving up on the first refusal.
+RETRY_WINDOW = 30
+RETRY_DELAY = 1.0
 
 
 class SppUnavailable(Exception):
@@ -69,7 +74,27 @@ async def _call(bus: MessageBus, path: str, interface: str, member: str, signatu
     return reply
 
 
-async def open_spp(device_path: str) -> socket.socket:
+async def open_spp(device_path: str, retry_window: float = RETRY_WINDOW) -> socket.socket:
+    """Connect to the scale's Serial Port, retrying while it refuses, and return the socket."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + retry_window
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            sock = await _open_spp_once(device_path)
+        except SppUnavailable as err:
+            if loop.time() + RETRY_DELAY >= deadline:
+                raise SppUnavailable(f"{err} (after {attempt} attempts)") from err
+            _LOGGER.debug("SPP attempt %d failed: %s; retrying", attempt, err)
+            await asyncio.sleep(RETRY_DELAY)
+            continue
+        if attempt > 1:
+            _LOGGER.debug("SPP connected on attempt %d", attempt)
+        return sock
+
+
+async def _open_spp_once(device_path: str) -> socket.socket:
     """Connect to the scale's Serial Port and return the (non-blocking) RFCOMM socket.
 
     The caller owns and closes the socket. The client profile is unregistered before returning,

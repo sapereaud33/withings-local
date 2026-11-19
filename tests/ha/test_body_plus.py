@@ -2,6 +2,8 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
@@ -101,3 +103,22 @@ async def test_weigh_in_syncs_over_classic_spp(hass: HomeAssistant, mock_bluetoo
     session_cls.assert_called_once_with(sock, sync_ok=True)
     assert read.await_args.kwargs["app_version"] == 8050004
     assert data.users[1001].values["weight"] == 80.5
+
+
+async def test_spp_retries_while_the_scale_refuses() -> None:
+    """The scale refuses the first page after a weigh-in (Limited Resources); keep trying."""
+    from custom_components.withings_local import spp
+
+    sock = MagicMock()
+    once = AsyncMock(side_effect=[spp.SppUnavailable("br-connection-refused")] * 2 + [sock])
+    with patch.object(spp, "_open_spp_once", once), patch.object(spp, "RETRY_DELAY", 0):
+        assert await spp.open_spp("/org/bluez/hci0/dev_00_24_E4_00_00_2B") is sock
+    assert once.await_count == 3
+
+
+async def test_spp_gives_up_after_the_window() -> None:
+    from custom_components.withings_local import spp
+
+    once = AsyncMock(side_effect=spp.SppUnavailable("br-connection-refused"))
+    with patch.object(spp, "_open_spp_once", once), pytest.raises(spp.SppUnavailable, match="attempts"):
+        await spp.open_spp("/org/bluez/hci0/dev_00_24_E4_00_00_2B", retry_window=0)
