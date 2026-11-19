@@ -84,6 +84,7 @@ async def open_spp(device_path: str, retry_window: float = RETRY_WINDOW) -> sock
         try:
             sock = await _open_spp_once(device_path)
         except SppUnavailable as err:
+            await _cancel_pending_connect(device_path)
             if loop.time() + RETRY_DELAY >= deadline:
                 raise SppUnavailable(f"{err} (after {attempt} attempts)") from err
             _LOGGER.debug("SPP attempt %d failed: %s; retrying", attempt, err)
@@ -92,6 +93,22 @@ async def open_spp(device_path: str, retry_window: float = RETRY_WINDOW) -> sock
         if attempt > 1:
             _LOGGER.debug("SPP connected on attempt %d", attempt)
         return sock
+
+
+async def _cancel_pending_connect(device_path: str) -> None:
+    """BlueZ keeps paging after a ConnectProfile we gave up on, and then answers every later
+    attempt with InProgress (br-connection-busy) and stops reporting the scale's advertisements
+    (seen 2026-11-19). Device1.Disconnect cancels the pending connection."""
+    try:
+        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        await _call(bus, device_path, "org.bluez.Device1", "Disconnect", timeout=5)
+    except Exception:  # noqa: BLE001 - nothing pending, or already gone
+        _LOGGER.debug("Device1.Disconnect after a failed attempt", exc_info=True)
+    finally:
+        bus.disconnect()
 
 
 async def _open_spp_once(device_path: str) -> socket.socket:

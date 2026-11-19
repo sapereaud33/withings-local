@@ -111,14 +111,23 @@ async def test_spp_retries_while_the_scale_refuses() -> None:
 
     sock = MagicMock()
     once = AsyncMock(side_effect=[spp.SppUnavailable("br-connection-refused")] * 2 + [sock])
-    with patch.object(spp, "_open_spp_once", once), patch.object(spp, "RETRY_DELAY", 0):
+    with (
+        patch.object(spp, "_open_spp_once", once),
+        patch.object(spp, "_cancel_pending_connect", AsyncMock()) as cancel,
+        patch.object(spp, "RETRY_DELAY", 0),
+    ):
         assert await spp.open_spp("/org/bluez/hci0/dev_00_24_E4_00_00_2B") is sock
     assert once.await_count == 3
+    assert cancel.await_count == 2
 
 
 async def test_spp_gives_up_after_the_window() -> None:
     from custom_components.withings_local import spp
 
     once = AsyncMock(side_effect=spp.SppUnavailable("br-connection-refused"))
-    with patch.object(spp, "_open_spp_once", once), pytest.raises(spp.SppUnavailable, match="attempts"):
+    with (
+        patch.object(spp, "_open_spp_once", once),
+        patch.object(spp, "_cancel_pending_connect", AsyncMock()),
+        pytest.raises(spp.SppUnavailable, match="attempts"),
+    ):
         await spp.open_spp("/org/bluez/hci0/dev_00_24_E4_00_00_2B", retry_window=0)
