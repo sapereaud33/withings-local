@@ -392,8 +392,10 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
             _LOGGER.debug("%s: RFCOMM connected after %.1fs", self.title, time.monotonic() - started)
             session = SppWppSession(sock, sync_ok=True)
             async with asyncio.timeout(SESSION_TIMEOUT_SECONDS):
+                now = dt_util.now()
                 result = await read_measurements(
                     None, self._kl, session, authentication_timeout=WBS06_RFCOMM_AUTH_TIMEOUT,
+                    setup_clock=(int(now.timestamp()), int(now.utcoffset().total_seconds())),
                 )
         except Exception as err:
             traffic = (
@@ -416,10 +418,14 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
 
     def _merge_result(self, result: SyncResult) -> ScaleData:
         """Apply verified WPP readings identically for BLE and incoming Classic."""
-        if not result.authenticated:
+        if result.setup_session:
+            # Body+ button session: no WPP challenge, but it ran over the bonded, encrypted
+            # Classic link, which only this scale can open.
+            _LOGGER.info("%s: setup-mode session completed (clock set, SETUP_OK sent)", self.title)
+        elif not result.authenticated:
             _LOGGER.debug("%s: session without authentication (button press?), nothing to read", self.title)
             return self.data
-        if not result.scale_verified:
+        elif not result.scale_verified:
             # A device that fails our challenge doesn't know kl: don't record what it sends
             # (anyone in range can copy the advertisement). A real scale always passes.
             _LOGGER.warning("%s: the device did not prove it knows the key; ignoring its readings", self.title)

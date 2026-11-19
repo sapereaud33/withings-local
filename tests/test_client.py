@@ -198,3 +198,33 @@ def test_missing_characteristic_names_the_model():
     with pytest.raises(LookupError, match="Body Comp"):
         wpp_client.find_wpp_characteristic(FakeClient(), BODY_COMP)
 
+
+
+class SetupModeScale(FakeScale):
+    """Body+ woken with the button: PROBE answered without a challenge."""
+
+    def answer(self, msg):
+        if msg.command == Cmd.PROBE:
+            return [Message(Cmd.PROBE, (Tlv(Obj.FACTORY_STATE, b"\x00"),))]
+        if msg.command in (Cmd.TIME_SET, Cmd.SETUP_OK):
+            return [Message(msg.command)]
+        return super().answer(msg)
+
+
+async def test_setup_session_is_completed_when_asked():
+    ble = SetupModeScale()
+    result = await wpp_client.read_measurements(ble, KL, setup_clock=(1_795_000_000, -18000))
+    assert result.setup_session and not result.authenticated
+    commands = [m.command for m in ble.sent]
+    assert commands[:2] == [Cmd.PROBE, Cmd.TIME_SET]
+    assert Cmd.SETUP_OK in commands and commands.index(Cmd.SYNC_OK) < commands.index(Cmd.SETUP_OK)
+    assert Cmd.PROBE_CHALLENGE not in commands
+    time_tlv = ble.sent[1].find(Obj.TIME_SET)[0].value
+    assert struct.unpack(">IiIi", time_tlv) == (1_795_000_000, -18000, 0, -18000)
+
+
+async def test_setup_session_is_dropped_by_default():
+    ble = SetupModeScale()
+    result = await wpp_client.read_measurements(ble, KL)
+    assert not result.setup_session
+    assert [m.command for m in ble.sent] == [Cmd.PROBE]

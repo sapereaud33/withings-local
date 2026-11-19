@@ -21,7 +21,7 @@ class Cmd:
     DISCONNECT = 272
     CONNECT_REASON = 273
     USER_UNIT = 274  # writes units on the scale; don't send
-    SETUP_OK = 275  # finalises setup; don't send
+    SETUP_OK = 275  # finalises a setup-mode session; only sent there (Body+ SPP)
     SYNC_OK = 277
     PROBE_CHALLENGE = 296
     ASSOCIATION_KEYS_SET = 308  # re-keys the scale; never send
@@ -89,6 +89,11 @@ def connect_reason_request() -> Message:
 
 def battery_request() -> Message:
     return Message(Cmd.BATTERY_PERCENT)
+
+
+def time_set(utc: int, gmt_offset: int) -> Message:
+    """TimeSet{utc u32, gmtOffset i32, dstChangeTime u32, nextGmtOffset i32} (no DST change known)."""
+    return Message(Cmd.TIME_SET, (Tlv(Obj.TIME_SET, struct.pack(">IiIi", utc, gmt_offset, 0, gmt_offset)),))
 
 
 def stored_measure(action: int) -> Message:

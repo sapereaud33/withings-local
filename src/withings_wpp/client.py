@@ -33,6 +33,7 @@ from .messages import (
     connect_reason_request,
     describe,
     probe,
+    time_set,
     stored_measure,
 )
 
@@ -379,6 +380,13 @@ class ScaleClient:
         connection. Reported not to delete or mark readings, so the phone app still gets them."""
         await self.session.request(Message(Cmd.SYNC_OK), timeout=3)
 
+    async def set_time(self, utc: int, gmt_offset: int) -> None:
+        await self.session.request(time_set(utc, gmt_offset), expect={Cmd.TIME_SET}, timeout=3)
+
+    async def setup_ok(self) -> None:
+        """End a setup-mode session the way the app does; without it the scale shows "Setup failed"."""
+        await self.session.request(Message(Cmd.SETUP_OK), timeout=3)
+
     async def disconnect(self) -> None:
         # The phone app sends this without waiting for an answer.
         await self.session.send(Message(Cmd.DISCONNECT))
@@ -405,6 +413,9 @@ class SyncResult:
     firmware: int | None
     groups: list[MeasureGroup]
     battery: int | None = None
+    # Readings from a setup-mode (button) session, which has no WPP challenge. Only trust these
+    # when the transport itself authenticated the device (Body+: bonded, encrypted Classic link).
+    setup_session: bool = False
 
 
 async def read_measurements(
@@ -414,10 +425,13 @@ async def read_measurements(
     *,
     app_version: int = APP_VERSION,
     authentication_timeout: float = 5.0,
+    setup_clock: tuple[int, int] | None = None,
 ) -> SyncResult:
     """Run one read-only session on a connected client: authenticate, read, disconnect.
 
     Pass a pre-built `session` to wire its `mark_disconnected` into the client's disconnect callback.
+    With `setup_clock` = (utc, gmt_offset), a setup-mode (unauthenticated) session is completed the
+    way the phone app does it instead of being dropped: see `_finish_setup_session`.
     """
     if session is None:
         if ble is None:
@@ -430,6 +444,8 @@ async def read_measurements(
     )
     firmware = auth_result.reply.soft_version if auth_result.reply else None
     if not auth_result.authenticated:
+        if setup_clock is not None:
+            return await _finish_setup_session(scale, session, firmware, *setup_clock)
         return SyncResult(False, False, None, firmware, [])
     if not auth_result.scale_verified:
         # A device that can't prove it knows kl gets no further commands: nothing is read from it
@@ -455,6 +471,31 @@ async def read_measurements(
             _LOGGER.debug("SYNC_OK not acknowledged", exc_info=True)
     await _say_goodbye(scale)
     return SyncResult(True, True, reason, firmware, groups, battery)
+
+
+async def _finish_setup_session(
+    scale: ScaleClient, session: WppConversation, firmware: int | None, utc: int, gmt_offset: int
+) -> SyncResult:
+    """Setup-mode session (button press, no challenge), as the app runs it (openwithings notes):
+    set the clock, read the stored measurements, SYNC_OK, SETUP_OK, disconnect. Nothing is deleted."""
+
+    async def optional(what: str, aw):
+        try:
+            return await aw
+        except (WppCommandError, TimeoutError, ValueError):
+            _LOGGER.debug("setup session: %s failed", what, exc_info=True)
+            return None
+
+    await optional("TIME_SET", scale.set_time(utc, gmt_offset))
+    battery = await optional("battery", scale.battery())
+    reason = await optional("connect reason", scale.connect_reason())
+    status = await scale.measure_status()
+    groups = merge_by_time(await scale.measures()) if status.count > 0 else []
+    if session.sync_ok:
+        await optional("SYNC_OK", scale.sync_ok())
+    await optional("SETUP_OK", scale.setup_ok())
+    await _say_goodbye(scale)
+    return SyncResult(False, False, reason, firmware, groups, battery, setup_session=True)
 
 
 async def _say_goodbye(scale: ScaleClient) -> None:
