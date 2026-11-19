@@ -24,8 +24,7 @@ from homeassistant.helpers.selector import TextSelector, TextSelectorConfig, Tex
 
 from .const import BODY_COMP_MODEL_ID, BODY_MODEL_ID, BODY_PLUS_MODEL_ID, BODY_SMART_MODEL_ID, CONF_KL, CONF_MODEL_ID, CONF_USERS, DOMAIN, LOCAL_NAME_PREFIX, SUPPORTED_MODELS
 from .classic_pairing import ClassicPairingSession
-from .coordinator import is_setup_mode
-from .le_pairing import BodyPlusPairing
+from .coordinator import classic_device_path, is_setup_mode
 from .pairing import PairingFailed, PairingSession, PairingUnsupported, device_path
 
 # How long to wait for the scale to advertise after the user holds its button.
@@ -270,9 +269,10 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             else (
                 "1. Choose *Pair now*.\n"
                 "2. **Hold the button under the scale for 3 seconds** until it shows 'Start app' "
-                "(setup mode). Home Assistant pairs without a code.\n\n"
-                "Keep your phone's Bluetooth off (or the Withings app closed) while pairing, "
-                "so the app doesn't take the connection first."
+                "(setup mode). Home Assistant pairs over Classic Bluetooth, without a code.\n\n"
+                "Keep your phone's Bluetooth off while pairing, so the app doesn't take the "
+                "connection first. The scale may show 'Setup failed' afterward; check for a new "
+                "weigh-in in Home Assistant instead."
             )
             if self._model_id == BODY_PLUS_MODEL_ID
             else (
@@ -348,9 +348,10 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             _LOGGER.info("%s: Classic Bluetooth bond confirmed", self._name)
             return True
         if self._model_id == BODY_PLUS_MODEL_ID:
-            # Just Works, triggered by the first GATT subscription (not by Pair()).
-            already = await BodyPlusPairing(self.hass, device_path(self.hass, service_info), service_info).pair()
-            _LOGGER.info("%s: %s", self._name, "already paired" if already else "paired")
+            # This Body+ firmware never accepts LE connections; it syncs over Classic SPP,
+            # so bond the Classic bearer (Just Works), like WBS06.
+            already = await ClassicPairingSession(classic_device_path(self.hass, service_info)).pair()
+            _LOGGER.info("%s: Classic Bluetooth %s", self._name, "bond already present" if already else "bond created")
             return True
         self._pairing = PairingSession(
             device_path(self.hass, service_info)

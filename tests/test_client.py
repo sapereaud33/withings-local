@@ -198,30 +198,3 @@ def test_missing_characteristic_names_the_model():
     with pytest.raises(LookupError, match="Body Comp"):
         wpp_client.find_wpp_characteristic(FakeClient(), BODY_COMP)
 
-
-class FakeSetupScale(FakeScale):
-    """A Body+ in setup mode: answers PROBE directly, echoes SYNC_OK and SETUP_OK."""
-
-    def answer(self, msg):
-        if msg.command == Cmd.PROBE:
-            return [Message(Cmd.PROBE)]
-        if msg.command in (Cmd.SYNC_OK, Cmd.SETUP_OK):
-            return [Message(msg.command)]
-        return []
-
-
-async def test_setup_session_closes_like_the_app():
-    from withings_wpp.devices import BODY_PLUS
-
-    scale = FakeSetupScale()
-    scale.services = [SimpleNamespace(characteristics=[SimpleNamespace(uuid="00000024-5749-5448-0005-000000000000")])]
-    session = wpp_client.WppSession(scale, profile=BODY_PLUS)
-    await wpp_client.setup_session(session)
-    assert [m.command for m in scale.sent] == [Cmd.PROBE, Cmd.SYNC_OK, Cmd.SETUP_OK, Cmd.DISCONNECT]
-
-
-async def test_setup_session_outside_setup_mode_reads_nothing():
-    scale = FakeScale()
-    session = wpp_client.WppSession(scale)
-    assert await wpp_client.setup_session(session) is None
-    assert [m.command for m in scale.sent] == [Cmd.PROBE, Cmd.DISCONNECT]

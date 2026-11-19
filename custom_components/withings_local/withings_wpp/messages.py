@@ -21,7 +21,7 @@ class Cmd:
     DISCONNECT = 272
     CONNECT_REASON = 273
     USER_UNIT = 274  # writes units on the scale; don't send
-    SETUP_OK = 275  # ends a setup-mode session; only sent by the Body+ pairing session
+    SETUP_OK = 275  # finalises setup; don't send
     SYNC_OK = 277
     PROBE_CHALLENGE = 296
     ASSOCIATION_KEYS_SET = 308  # re-keys the scale; never send

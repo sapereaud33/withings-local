@@ -8,12 +8,14 @@ Fork (sapereaud33/withings-local) adding the Body+.
 
 ### Added
 
-- Body+ (WBS05) support, following openwithings' protocol notes: discovery by its `…5749-5448-0005-…`
-  service UUID (or a `Body+` name), weigh-in detection from the MAC in the UUID tail, the same WPP
-  session as the Body Smart (SYNC_OK included), and Just Works pairing. The pairing step registers a
-  temporary agent that only accepts this scale, makes the adapter bondable for the attempt, and runs a
-  setup-mode session (PROBE, SYNC_OK, SETUP_OK, DISCONNECT): the scale only pairs when security is
-  raised in reaction to its refusal of the first subscription, not on `Pair()`.
+- Body+ (WBS05) support. On the tested scale the openwithings GATT route is impossible: it never
+  sends a connectable LE advertisement (only ADV_SCAN_IND, in setup mode and after weigh-ins). It
+  does accept Classic connections and publishes SPP, iAP2 and Withings SDP records. So after a
+  weigh-in advertisement (MAC in the `…5749-5448-0005-…` UUID tail) Home Assistant opens the SPP
+  channel through a BlueZ client Profile1 (`spp.py`) and runs WPP over FragFsm, sending the
+  FragFsm RESET itself when the scale doesn't, with the WBS06 RFCOMM app version and SYNC_OK.
+  Pairing bonds the Classic bearer (Just Works) with the WBS06 routine. Not yet confirmed on
+  hardware past the SDP lookup.
 
 ## [Unreleased]
 

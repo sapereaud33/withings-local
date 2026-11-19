@@ -2,7 +2,7 @@
 
 Get the readings from your Withings scale into Home Assistant **over Bluetooth, locally**, without going through the Withings cloud. Body Smart (WBS13), Body Comp (WBS12), Body (WBS06, also sold as Nokia Body) and, in this fork, Body+ (WBS05) are supported; other devices aren't supported yet. See [Help add your device](#help-add-your-device).
 
-> **Fork note (Body+ / WBS05):** this fork adds the Body+, based on [openwithings](https://github.com/totruok/openwithings). Choose *Pair now*, then hold the button under the scale for 3 s until it shows "Start app": Home Assistant pairs without a code (Just Works) and ends the setup session the way the Withings app does. Needs a local Bluetooth adapter on the Home Assistant host (not an ESPHome proxy) and the scale in Bluetooth mode.
+> **Fork note (Body+ / WBS05), experimental:** this fork adds the Body+. The tested scale never accepts LE connections (unlike the firmware [openwithings](https://github.com/totruok/openwithings) documents), so the integration syncs it over Classic Bluetooth: it opens the scale's serial port after each weigh-in, like the Withings app on Android. Choose *Pair now*, then hold the button under the scale for 3 s until it shows "Start app". Needs a local Classic-capable Bluetooth adapter on the Home Assistant host (not an ESPHome proxy) and the scale in Bluetooth mode.
 
 On Body Smart, step on the scale, and a minute later your weight, body fat, muscle mass and more show up as sensors in Home Assistant, ready for dashboards, history graphs and automations.
 

@@ -5,8 +5,9 @@ profile only records the differences. Body (WBS06) isn't here: it speaks WPP ove
 RFCOMM, not GATT.
 
 The Body Comp profile comes from a community report (issue #5, one WBS12, tested with BlueZ and
-Home Assistant). The Body+ profile follows openwithings (github.com/totruok/openwithings), which
-documents a WBS05 (firmware 1651) end to end over BlueZ.
+Home Assistant). The Body+ GATT profile follows openwithings (github.com/totruok/openwithings,
+WBS05 firmware 1651). Other Body+ firmware never accepts LE connections and syncs over Classic
+SPP instead (FragFsm framing, see the integration's spp.py); the profile's sync_ok still applies.
 """
 
 from __future__ import annotations

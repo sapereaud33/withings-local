@@ -12,7 +12,13 @@ import time
 
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 from .withings_wpp.advertisement import FD77, Fd77, WithingsUuid
-from .withings_wpp.client import RfcommWppSession, SyncResult, WppSession, read_measurements
+from .withings_wpp.client import (
+    OutgoingRfcommWppSession,
+    RfcommWppSession,
+    SyncResult,
+    WppSession,
+    read_measurements,
+)
 from .withings_wpp.devices import BODY_SMART, PROFILES
 from .withings_wpp.measures import MeasureGroup, merge_by_time
 
@@ -38,8 +44,8 @@ from .const import (
     POLL_COOLDOWN_SECONDS,
     SESSION_TIMEOUT_SECONDS,
 )
-from .le_pairing import prefer_le
 from .pairing import PairingUnsupported, device_path
+from .spp import open_spp
 from .rfcomm import Wbs06RfcommServer
 
 _LOGGER = logging.getLogger(__name__)
@@ -118,6 +124,15 @@ def has_new_data(service_info: BluetoothServiceInfoBleak, model_id: int = BODY_S
         return False
     mfr = service_info.manufacturer_data.get(WITHINGS_COMPANY_ID)
     return bool(mfr) and any(mfr)
+
+
+def classic_device_path(hass: HomeAssistant, service_info: BluetoothServiceInfoBleak) -> str:
+    """BlueZ object path for a Classic connection. A proxy may have relayed the advertisement,
+    but Classic needs the local adapter: fall back to hci0."""
+    try:
+        return device_path(hass, service_info)
+    except PairingUnsupported:
+        return f"/org/bluez/hci0/dev_{service_info.address.upper().replace(':', '_')}"
 
 
 def _is_bonded(device) -> bool:
@@ -294,6 +309,8 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
     async def _async_sync(self, service_info: BluetoothServiceInfoBleak) -> ScaleData:
         if self.model_id == BODY_MODEL_ID:
             raise RuntimeError("WBS06 readings arrive through incoming Classic RFCOMM")
+        if self.model_id == BODY_PLUS_MODEL_ID:
+            return await self._async_sync_spp(service_info)
         _LOGGER.info(
             "%s: weigh-in advertised, connecting via %s (rssi %s)", self.title, service_info.source, service_info.rssi
         )
@@ -313,11 +330,6 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
                 device or service_info.device
             )
 
-        if self.model_id == BODY_PLUS_MODEL_ID:
-            try:
-                await prefer_le(device_path(self.hass, service_info))
-            except PairingUnsupported:
-                pass  # a proxy: no BlueZ device object to configure
         try:
             client = await establish_connection(
                 BleakClientWithServiceCache,
@@ -366,6 +378,42 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
                 hint,
             )
             raise
+        return self._merge_result(result)
+
+    async def _async_sync_spp(self, service_info: BluetoothServiceInfoBleak) -> ScaleData:
+        """Body+: open the scale's Classic serial port and run the WPP read over FragFsm."""
+        _LOGGER.info("%s: weigh-in advertised, connecting over Classic Bluetooth", self.title)
+        started = time.monotonic()
+        step = "connecting"
+        session: OutgoingRfcommWppSession | None = None
+        try:
+            sock = await open_spp(classic_device_path(self.hass, service_info))
+            step = "reading"
+            _LOGGER.debug("%s: RFCOMM connected after %.1fs", self.title, time.monotonic() - started)
+            session = OutgoingRfcommWppSession(sock, sync_ok=True)
+            async with asyncio.timeout(SESSION_TIMEOUT_SECONDS):
+                result = await read_measurements(
+                    None, self._kl, session,
+                    app_version=WBS06_RFCOMM_APP_VERSION,
+                    authentication_timeout=WBS06_RFCOMM_AUTH_TIMEOUT,
+                )
+        except Exception as err:
+            traffic = (
+                f" (sent {session.tx_bytes} B, received {session.rx_bytes} B in {session.rx_chunks} chunks)"
+                if session is not None else ""
+            )
+            _LOGGER.warning(
+                "%s: Classic sync failed while %s after %.1fs%s: %s: %s",
+                self.title, step, time.monotonic() - started, traffic, type(err).__name__, err,
+            )
+            raise
+        finally:
+            if session is not None:
+                await session.close()
+        _LOGGER.debug(
+            "%s: Classic session done: authenticated %s, verified %s, %d group(s)",
+            self.title, result.authenticated, result.scale_verified, len(result.groups),
+        )
         return self._merge_result(result)
 
     def _merge_result(self, result: SyncResult) -> ScaleData:

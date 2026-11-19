@@ -241,6 +241,9 @@ class RfcommWppSession(WppConversation):
     async def _receive(self) -> None:
         try:
             while chunk := await asyncio.get_running_loop().sock_recv(self._sock, 4096):
+                if not self.rx_bytes:
+                    # Framing headers only (at most 4 bytes), never payload: helps tell FragFsm from raw WPP.
+                    _LOGGER.debug("RFCOMM first bytes: %s", chunk[:4].hex(" "))
                 self.rx_bytes += len(chunk)
                 self.rx_chunks += 1
                 for payload in self._fragfsm.feed(chunk):
@@ -265,6 +268,34 @@ class RfcommWppSession(WppConversation):
         if self._reader_task is not None:
             self._reader_task.cancel()
             await asyncio.gather(self._reader_task, return_exceptions=True)
+
+
+class OutgoingRfcommWppSession(RfcommWppSession):
+    """WPP over FragFsm on an RFCOMM link that we opened (Body+: the host connects to the scale).
+
+    Who sends the FragFsm RESET first on an outgoing link is unknown: wait briefly for the
+    scale's, and if none comes, send ours (`01 00`) and wait for the reply RESET before WPP.
+    """
+
+    RESET = b"\x01\x00"
+
+    async def start(self) -> None:
+        if self._reader_task is not None:
+            raise RuntimeError("RFCOMM reader already started")
+        self._reader_task = asyncio.create_task(self._receive())
+        for send_reset, wait in ((False, 1.5), (True, 3.0)):
+            if send_reset:
+                _LOGGER.debug("no FragFsm RESET from the device; sending ours")
+                await asyncio.get_running_loop().sock_sendall(self._sock, self.RESET)
+                self.tx_bytes += len(self.RESET)
+            try:
+                async with asyncio.timeout(wait):
+                    await self._until_disconnect(self._reset_received.wait(), "waiting for FragFsm RESET")
+            except TimeoutError:
+                continue
+            await asyncio.sleep(FRAGFSM_SETTLE_SECONDS)
+            return
+        _LOGGER.warning("no FragFsm RESET on the outgoing RFCOMM link; trying WPP anyway")
 
 
 class ScaleClient:
@@ -318,14 +349,6 @@ class ScaleClient:
         """Acknowledge the sync. Reported as required: without it the scale may ignore the next
         connection. Reported not to delete or mark readings, so the phone app still gets them."""
         await self.session.request(Message(Cmd.SYNC_OK), timeout=3)
-
-    async def setup_ok(self) -> None:
-        """Close a setup-mode (button) session the way the phone app does.
-
-        Only used for the Body+ (WBS05) pairing session: without it the scale shows "Setup failed"
-        and may ignore the next connection (openwithings). It doesn't change the scale's settings.
-        """
-        await self.session.request(Message(Cmd.SETUP_OK), timeout=3)
 
     async def disconnect(self) -> None:
         # The phone app sends this without waiting for an answer.
@@ -411,26 +434,3 @@ async def _say_goodbye(scale: ScaleClient) -> None:
     except Exception:  # noqa: BLE001 - the scale may already be gone
         _LOGGER.debug("disconnect message not delivered", exc_info=True)
 
-
-async def setup_session(session: WppConversation) -> ProbeReply | None:
-    """Run a setup-mode session to completion: subscribe, PROBE, SYNC_OK, SETUP_OK, DISCONNECT.
-
-    Subscribing is what makes BlueZ pair with a Body+ (the scale refuses the subscription until
-    the link is encrypted), so this is the Body+ pairing step. Nothing is read or changed.
-    Returns the PROBE reply when the scale was in setup mode, None when it asked for
-    authentication instead (not in setup mode: the bond still forms, the session just ends).
-    """
-    await session.start()
-    scale = ScaleClient(session)
-    answers = {Cmd.PROBE, Cmd.PROBE_CHALLENGE}
-    (reply,) = await session.request(probe(), expect=answers)
-    if reply.base_command != Cmd.PROBE:
-        await _say_goodbye(scale)
-        return None
-    for step in (scale.sync_ok, scale.setup_ok):
-        try:
-            await step()
-        except (WppCommandError, TimeoutError):
-            _LOGGER.debug("%s not acknowledged", step.__name__, exc_info=True)
-    await _say_goodbye(scale)
-    return _probe_reply(reply)

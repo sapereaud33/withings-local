@@ -180,3 +180,39 @@ async def test_rfcomm_uses_verified_wpp_authentication_before_reading(knows_key:
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_outgoing_link_sends_reset_when_the_device_does_not() -> None:
+    """Body+: we open the link; if the scale stays silent we send RESET and wait for its reply."""
+    from withings_wpp.client import OutgoingRfcommWppSession
+
+    local, peer = socket.socketpair()
+    local.setblocking(False)
+    peer.setblocking(False)
+    loop = asyncio.get_running_loop()
+    session = OutgoingRfcommWppSession(local, sync_ok=True)
+    try:
+        start = asyncio.create_task(session.start())
+        assert await asyncio.wait_for(loop.sock_recv(peer, 16), 3) == b"\x01\x00"
+        await loop.sock_sendall(peer, b"\x01\x00")
+        await asyncio.wait_for(start, 2)
+        assert session.tx_bytes == 2
+    finally:
+        await session.close()
+        peer.close()
+
+
+async def test_outgoing_link_uses_the_device_reset() -> None:
+    from withings_wpp.client import OutgoingRfcommWppSession
+
+    local, peer = socket.socketpair()
+    local.setblocking(False)
+    peer.setblocking(False)
+    session = OutgoingRfcommWppSession(local, sync_ok=True)
+    try:
+        await asyncio.get_running_loop().sock_sendall(peer, b"\x01\x00")
+        await asyncio.wait_for(session.start(), 2)
+        assert session.tx_bytes == 0  # we didn't need to send our own RESET
+    finally:
+        await session.close()
+        peer.close()
