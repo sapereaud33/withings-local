@@ -26,10 +26,12 @@ PROFILE_INTERFACE = "org.bluez.Profile1"
 PROFILE_MANAGER_PATH = "/org/bluez"
 PROFILE_PATH_PREFIX = "/org/home_assistant/withings_local/wbs06_profile_"
 
-# Services used by the WBS06 for incoming RFCOMM connections.
+# Services the scales look up (SDP) before opening their RFCOMM link to the phone app.
+# WBS06 asks for the first two; a Body+ (WBS05) asks for the first and 00009994 (2026-11-19).
 WBS06_RFCOMM_UUIDS = (
     "00000001-e1ba-dfb7-c7f0-da2b149de289",
     "00009990-0000-1000-8000-00805f9b34fb",
+    "00009994-0000-1000-8000-00805f9b34fb",
 )
 
 type ConnectionHandler = Callable[[socket.socket], Awaitable[None]]

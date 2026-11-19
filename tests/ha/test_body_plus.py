@@ -96,6 +96,7 @@ async def test_weigh_in_syncs_over_classic_spp(hass: HomeAssistant, mock_bluetoo
         patch("custom_components.withings_local.coordinator.open_spp", AsyncMock(return_value=sock)) as spp,
         patch("custom_components.withings_local.coordinator.read_measurements", AsyncMock(return_value=result)) as read,
         patch("custom_components.withings_local.coordinator.SppWppSession") as session_cls,
+        patch("custom_components.withings_local.coordinator.INCOMING_GRACE_SECONDS", 0),
     ):
         session_cls.return_value.close = AsyncMock()
         data = await coordinator._async_sync(body_plus())  # noqa: SLF001
@@ -131,3 +132,31 @@ async def test_spp_gives_up_after_the_window() -> None:
         pytest.raises(spp.SppUnavailable, match="attempts"),
     ):
         await spp.open_spp("/org/bluez/hci0/dev_00_24_E4_00_00_2B", retry_window=0)
+
+
+async def test_weigh_in_waits_for_the_scale_to_connect(hass: HomeAssistant) -> None:
+    """After a weigh-in the Body+ calls us; then no outgoing connection is made."""
+    import asyncio
+    import time
+
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.withings_local.coordinator import WithingsScaleCoordinator
+
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=ADDRESS.lower(), title="Body+",
+                            data={"address": ADDRESS, CONF_KL: TEST_KL, CONF_MODEL_ID: BODY_PLUS_MODEL_ID})
+    entry.add_to_hass(hass)
+    coordinator = WithingsScaleCoordinator(hass, entry)
+
+    async def scale_calls():
+        await asyncio.sleep(0.1)
+        coordinator._incoming_at = time.monotonic()  # noqa: SLF001 - what the incoming handler records
+
+    with (
+        patch("custom_components.withings_local.coordinator.open_spp", AsyncMock()) as spp,
+        patch("custom_components.withings_local.coordinator.INCOMING_GRACE_SECONDS", 5),
+    ):
+        caller = asyncio.create_task(scale_calls())
+        await coordinator._async_sync(body_plus())  # noqa: SLF001
+        await caller
+    spp.assert_not_awaited()

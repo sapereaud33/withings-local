@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import BODY_MODEL_ID, BODY_SMART_MODEL_ID, CONF_MODEL_ID, DOMAIN, LOCAL_NAME_PREFIX, SUPPORTED_MODELS
+from .const import BODY_MODEL_ID, BODY_PLUS_MODEL_ID, BODY_SMART_MODEL_ID, CONF_MODEL_ID, DOMAIN, LOCAL_NAME_PREFIX, SUPPORTED_MODELS
 from .coordinator import WithingsLocalConfigEntry, WithingsScaleCoordinator
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
@@ -33,7 +33,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: WithingsLocalConfigEntry
         model=model,
         model_id=model_id,
     )
-    if coordinator.model_id == BODY_MODEL_ID:
+    if coordinator.model_id in (BODY_MODEL_ID, BODY_PLUS_MODEL_ID):
         try:
             await coordinator.async_start_classic()
         except Exception as err:

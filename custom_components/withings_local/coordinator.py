@@ -21,6 +21,7 @@ from .withings_wpp.client import (
 )
 from .withings_wpp.devices import BODY_SMART, PROFILES
 from .withings_wpp.measures import MeasureGroup, merge_by_time
+from .withings_wpp.messages import APP_VERSION
 
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothScanningMode, BluetoothServiceInfoBleak
@@ -54,6 +55,9 @@ _CLASSIC_SERVER_KEY = "wbs06_classic_server"
 _CLASSIC_LOCK_KEY = "wbs06_classic_lock"
 
 type WithingsLocalConfigEntry = ConfigEntry[WithingsScaleCoordinator]
+
+# Body+: how long to wait for the scale to connect to us after it advertises.
+INCOMING_GRACE_SECONDS = 20
 
 # WBS06 requires this APP_PROBE version during Classic synchronization.
 WBS06_RFCOMM_APP_VERSION = 8050004
@@ -173,6 +177,7 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
         self._new_user_listeners: list[Callable[[list[int]], None]] = []
         self._pairing_requested = False
         self._classic_server: Wbs06RfcommServer | None = None
+        self._incoming_at: float | None = None
         super().__init__(
             hass=hass,
             logger=_LOGGER,
@@ -186,7 +191,7 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
 
     async def async_start_classic(self) -> None:
         """Share one native RFCOMM profile pair across all configured WBS06 scales."""
-        if self.model_id != BODY_MODEL_ID or self._classic_server is not None:
+        if self.model_id not in (BODY_MODEL_ID, BODY_PLUS_MODEL_ID) or self._classic_server is not None:
             return
         data = self.hass.data.setdefault(DOMAIN, {})
         lock = data.setdefault(_CLASSIC_LOCK_KEY, asyncio.Lock())
@@ -226,13 +231,18 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
         change the state of measurements before the transport is validated
         against this model.
         """
-        session = RfcommWppSession(sock, sync_ok=False)
+        body_plus = self.model_id == BODY_PLUS_MODEL_ID
+        if body_plus:
+            self._incoming_at = time.monotonic()
+            _LOGGER.info("%s: the scale connected over Classic Bluetooth", self.title)
+        # Body+ gets SYNC_OK and the phone app's current version, as in its outgoing sessions.
+        session = RfcommWppSession(sock, sync_ok=body_plus)
         try:
             try:
                 async with asyncio.timeout(SESSION_TIMEOUT_SECONDS):
                     result = await read_measurements(
                         None, self._kl, session,
-                        app_version=WBS06_RFCOMM_APP_VERSION,
+                        app_version=APP_VERSION if body_plus else WBS06_RFCOMM_APP_VERSION,
                         authentication_timeout=WBS06_RFCOMM_AUTH_TIMEOUT,
                     )
             except TimeoutError:
@@ -381,8 +391,20 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
         return self._merge_result(result)
 
     async def _async_sync_spp(self, service_info: BluetoothServiceInfoBleak) -> ScaleData:
-        """Body+: open the scale's Classic serial port and run a plain WPP read."""
-        _LOGGER.info("%s: weigh-in advertised, connecting over Classic Bluetooth", self.title)
+        """Body+: let the scale connect to us; if it doesn't, open its serial port ourselves.
+
+        After a weigh-in the Body+ pages its host and opens RFCOMM to the phone app's service
+        (served by the shared RfcommServer, see _handle_classic_connection). Paging it at the same
+        time makes both sides busy, so first stay idle (page-scannable) for INCOMING_GRACE_SECONDS.
+        Woken with the button it doesn't call: then we connect, and it starts a setup-mode session.
+        """
+        started = time.monotonic()
+        while time.monotonic() - started < INCOMING_GRACE_SECONDS:
+            if self._incoming_at is not None and self._incoming_at >= started - 5:
+                _LOGGER.debug("%s: the scale connected to us; no outgoing connection needed", self.title)
+                return self.data
+            await asyncio.sleep(0.5)
+        _LOGGER.info("%s: the scale didn't connect to us; connecting over Classic Bluetooth", self.title)
         started = time.monotonic()
         step = "connecting"
         session: SppWppSession | None = None

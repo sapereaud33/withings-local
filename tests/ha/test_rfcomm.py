@@ -77,7 +77,7 @@ async def test_registers_only_two_verified_services_and_unloads_cleanly():
     factory.assert_called_once()
     assert factory.call_args.kwargs["negotiate_unix_fd"] is True
     registrations = [m for m in bus.calls if m.member == "RegisterProfile"]
-    assert len(registrations) == 2
+    assert len(registrations) == len(WBS06_RFCOMM_UUIDS)
     assert [m.body[1] for m in registrations] == list(WBS06_RFCOMM_UUIDS)
     for msg in registrations:
         assert msg.signature == "osa{sv}"
@@ -89,7 +89,7 @@ async def test_registers_only_two_verified_services_and_unloads_cleanly():
         assert options["RequireAuthorization"].value is False
     await server.stop()
     assert [m.member for m in bus.calls[-2:]] == ["UnregisterProfile", "UnregisterProfile"]
-    assert len(bus.removed) == 2
+    assert len(bus.removed) == len(WBS06_RFCOMM_UUIDS)
     assert bus.disconnected
 
 
@@ -101,7 +101,7 @@ async def test_registration_failure_rolls_back_the_first_profile():
         with pytest.raises(RuntimeError, match="registering WBS06"):
             await server.start()
     assert sum(m.member == "UnregisterProfile" for m in bus.calls) == 1
-    assert len(bus.removed) == 2
+    assert len(bus.removed) == len(WBS06_RFCOMM_UUIDS)
     assert bus.disconnected
 
 
@@ -221,7 +221,7 @@ async def test_bluez_owner_return_restores_missing_profiles_without_duplicate_ex
         assert server._registered == []
         bus.signal_bluez("", ":1.13")
         await asyncio.wait_for(server._recovery_task, 1)
-    assert len([m for m in bus.calls if m.member == "RegisterProfile"]) == 4
+    assert len([m for m in bus.calls if m.member == "RegisterProfile"]) == 2 * len(WBS06_RFCOMM_UUIDS)
     assert bus.exports == initial_exports
     await server.stop()
     assert not bus.handlers
@@ -248,15 +248,16 @@ async def test_bluez_restart_retries_when_registration_temporarily_fails():
     try:
         with patch("custom_components.withings_local.rfcomm.MessageBus", return_value=bus):
             await server.start()
-            bus.fail_on_registration = 3
+            bus.fail_on_registration = len(WBS06_RFCOMM_UUIDS) + 1  # the first re-registration
             bus.signal_bluez(":1.20", "")
             bus.signal_bluez("", ":1.21")
             await asyncio.sleep(0)
             assert len(server._registered) == 0
             bus.fail_on_registration = 0
             await asyncio.wait_for(server._recovery_task, 2.5)
-        assert len(server._registered) == 2
-        assert [m.body[1] for m in bus.calls if m.member == "RegisterProfile"][-2:] == list(WBS06_RFCOMM_UUIDS)
+        n = len(WBS06_RFCOMM_UUIDS)
+        assert len(server._registered) == n
+        assert [m.body[1] for m in bus.calls if m.member == "RegisterProfile"][-n:] == list(WBS06_RFCOMM_UUIDS)
     finally:
         await server.stop()
 
