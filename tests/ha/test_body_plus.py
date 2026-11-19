@@ -160,3 +160,34 @@ async def test_weigh_in_waits_for_the_scale_to_connect(hass: HomeAssistant) -> N
         await coordinator._async_sync(body_plus())  # noqa: SLF001
         await caller
     spp.assert_not_awaited()
+
+
+async def test_incoming_session_without_challenge_needs_an_encrypted_link(hass: HomeAssistant) -> None:
+    """A Body+ that lost its kl skips the challenge: trusted only over an encrypted bonded link."""
+    from datetime import UTC, datetime
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.withings_local.coordinator import WithingsScaleCoordinator
+    from custom_components.withings_local.withings_wpp.client import SyncResult
+    from custom_components.withings_local.withings_wpp.measures import Measure, MeasureGroup
+
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=ADDRESS.lower(), title="Body+",
+                            data={"address": ADDRESS, CONF_KL: TEST_KL, CONF_MODEL_ID: BODY_PLUS_MODEL_ID})
+    entry.add_to_hass(hass)
+    group = MeasureGroup(datetime(2026, 11, 19, tzinfo=UTC), [1001], 0, 0, [Measure(1, 80.5)])
+    setup = SyncResult(False, False, 2, 1651, [group], setup_session=True)
+    dropped = SyncResult(False, False, None, 1651, [])
+
+    for encrypted, result, expect in ((True, setup, True), (False, dropped, False)):
+        coordinator = WithingsScaleCoordinator(hass, entry)
+        with (
+            patch("custom_components.withings_local.coordinator._link_encrypted", return_value=encrypted),
+            patch("custom_components.withings_local.coordinator.read_measurements", AsyncMock(return_value=result)) as read,
+            patch("custom_components.withings_local.coordinator.RfcommWppSession") as session_cls,
+        ):
+            session_cls.return_value.close = AsyncMock()
+            await coordinator._handle_classic_connection(MagicMock())  # noqa: SLF001
+        kwargs = read.await_args.kwargs
+        assert (kwargs["setup_clock"] is not None) is encrypted
+        assert kwargs["setup_ok"] is False
+        assert (1001 in coordinator.data.users) is expect

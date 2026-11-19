@@ -6,8 +6,10 @@ from dataclasses import dataclass, field
 from collections.abc import Callable
 import asyncio
 from datetime import datetime
+import fcntl
 import logging
 import socket
+import struct
 import time
 
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
@@ -55,6 +57,12 @@ _CLASSIC_SERVER_KEY = "wbs06_classic_server"
 _CLASSIC_LOCK_KEY = "wbs06_classic_lock"
 
 type WithingsLocalConfigEntry = ConfigEntry[WithingsScaleCoordinator]
+
+# <bluetooth/hci.h>
+HCIGETCONNINFO = 0x800448D5  # _IOR('H', 213, int)
+ACL_LINK = 1
+HCI_LM_AUTH = 0x0002
+HCI_LM_ENCRYPT = 0x0004
 
 # Body+: how long to wait for the scale to connect to us after it advertises.
 INCOMING_GRACE_SECONDS = 20
@@ -137,6 +145,26 @@ def classic_device_path(hass: HomeAssistant, service_info: BluetoothServiceInfoB
         return device_path(hass, service_info)
     except PairingUnsupported:
         return f"/org/bluez/hci0/dev_{service_info.address.upper().replace(':', '_')}"
+
+
+def _link_encrypted(sock: socket.socket, adapter: int = 0) -> bool:
+    """True when the ACL link under this RFCOMM socket is authenticated and encrypted.
+
+    The RFCOMM socket's own BT_SECURITY only reflects what the listening profile asked for, so
+    ask the adapter (HCIGETCONNINFO) for the link mode of the peer's connection.
+    """
+    try:
+        peer = sock.getpeername()[0]
+        req = bytearray(bytes.fromhex(peer.replace(":", ""))[::-1] + bytes([ACL_LINK]) + bytes(17))
+        with socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW, socket.BTPROTO_HCI) as hci:
+            hci.bind((adapter,))
+            fcntl.ioctl(hci.fileno(), HCIGETCONNINFO, req, True)
+    except (OSError, ValueError, IndexError, TypeError, AttributeError):
+        _LOGGER.debug("could not read the Classic link mode", exc_info=True)
+        return False
+    # struct hci_conn_info_req {bdaddr; type; hci_conn_info {u16 handle; bdaddr; type; out; u16 state; u32 link_mode}}
+    link_mode = struct.unpack_from("<I", req, 20)[0]
+    return link_mode & (HCI_LM_AUTH | HCI_LM_ENCRYPT) == (HCI_LM_AUTH | HCI_LM_ENCRYPT)
 
 
 def _is_bonded(device) -> bool:
@@ -236,14 +264,25 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
             self._incoming_at = time.monotonic()
             _LOGGER.info("%s: the scale connected over Classic Bluetooth", self.title)
         # Body+ gets SYNC_OK and the phone app's current version, as in its outgoing sessions.
+        # A Body+ that lost its kl (battery change) skips the WPP challenge. Its readings are still
+        # trusted when the link is encrypted with our Classic bond key: only the bonded scale has it.
+        trust_link = body_plus and _link_encrypted(sock)
         session = RfcommWppSession(sock, sync_ok=body_plus)
         try:
             try:
+                extra = {}
+                if body_plus:
+                    now = dt_util.now()
+                    extra = {
+                        "setup_clock": (int(now.timestamp()), int(now.utcoffset().total_seconds())) if trust_link else None,
+                        "setup_ok": False,  # a weigh-in session, not setup
+                    }
                 async with asyncio.timeout(SESSION_TIMEOUT_SECONDS):
                     result = await read_measurements(
                         None, self._kl, session,
                         app_version=APP_VERSION if body_plus else WBS06_RFCOMM_APP_VERSION,
                         authentication_timeout=WBS06_RFCOMM_AUTH_TIMEOUT,
+                        **extra,
                     )
             except TimeoutError:
                 _LOGGER.warning(
@@ -251,7 +290,7 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
                     self.title, session.tx_bytes, session.rx_bytes, session.rx_chunks,
                 )
                 return
-            if not result.authenticated or not result.scale_verified:
+            if not (result.authenticated and result.scale_verified) and not result.setup_session:
                 _LOGGER.warning("%s: rejected unauthenticated RFCOMM measurements", self.title)
                 return
             # ActiveBluetoothDataUpdateCoordinator is not a general

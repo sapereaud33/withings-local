@@ -426,6 +426,7 @@ async def read_measurements(
     app_version: int = APP_VERSION,
     authentication_timeout: float = 5.0,
     setup_clock: tuple[int, int] | None = None,
+    setup_ok: bool = True,
 ) -> SyncResult:
     """Run one read-only session on a connected client: authenticate, read, disconnect.
 
@@ -445,7 +446,7 @@ async def read_measurements(
     firmware = auth_result.reply.soft_version if auth_result.reply else None
     if not auth_result.authenticated:
         if setup_clock is not None:
-            return await _finish_setup_session(scale, session, firmware, *setup_clock)
+            return await _finish_setup_session(scale, session, firmware, *setup_clock, setup_ok=setup_ok)
         return SyncResult(False, False, None, firmware, [])
     if not auth_result.scale_verified:
         # A device that can't prove it knows kl gets no further commands: nothing is read from it
@@ -474,7 +475,8 @@ async def read_measurements(
 
 
 async def _finish_setup_session(
-    scale: ScaleClient, session: WppConversation, firmware: int | None, utc: int, gmt_offset: int
+    scale: ScaleClient, session: WppConversation, firmware: int | None, utc: int, gmt_offset: int,
+    *, setup_ok: bool = True,
 ) -> SyncResult:
     """Setup-mode session (button press, no challenge), as the app runs it (openwithings notes):
     set the clock, read the stored measurements, SYNC_OK, SETUP_OK, disconnect. Nothing is deleted."""
@@ -493,7 +495,8 @@ async def _finish_setup_session(
     groups = merge_by_time(await scale.measures()) if status.count > 0 else []
     if session.sync_ok:
         await optional("SYNC_OK", scale.sync_ok())
-    await optional("SETUP_OK", scale.setup_ok())
+    if setup_ok:
+        await optional("SETUP_OK", scale.setup_ok())
     await _say_goodbye(scale)
     return SyncResult(False, False, reason, firmware, groups, battery, setup_session=True)
 
