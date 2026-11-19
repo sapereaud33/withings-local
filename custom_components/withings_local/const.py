@@ -7,11 +7,13 @@ OPT_KNOWN_USERS = "known_users"  # user ids seen on the scale, in order of first
 GUEST_USER_ID = 0
 
 LOCAL_NAME_PREFIX = "Body Smart"
+BODY_PLUS_MODEL_ID = 0x0005
 BODY_MODEL_ID = 0x0007
 BODY_SMART_MODEL_ID = 0x0010
 BODY_COMP_MODEL_ID = 0x0012
 CONF_MODEL_ID = "model_id"
 SUPPORTED_MODELS = {
+    BODY_PLUS_MODEL_ID: ("Body+", "WBS05"),
     BODY_MODEL_ID: ("Body", "WBS06"),
     BODY_SMART_MODEL_ID: ("Body Smart", "WBS13"),
     BODY_COMP_MODEL_ID: ("Body Comp", "WBS12"),

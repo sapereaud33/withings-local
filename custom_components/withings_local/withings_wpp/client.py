@@ -319,6 +319,14 @@ class ScaleClient:
         connection. Reported not to delete or mark readings, so the phone app still gets them."""
         await self.session.request(Message(Cmd.SYNC_OK), timeout=3)
 
+    async def setup_ok(self) -> None:
+        """Close a setup-mode (button) session the way the phone app does.
+
+        Only used for the Body+ (WBS05) pairing session: without it the scale shows "Setup failed"
+        and may ignore the next connection (openwithings). It doesn't change the scale's settings.
+        """
+        await self.session.request(Message(Cmd.SETUP_OK), timeout=3)
+
     async def disconnect(self) -> None:
         # The phone app sends this without waiting for an answer.
         await self.session.send(Message(Cmd.DISCONNECT))
@@ -402,3 +410,27 @@ async def _say_goodbye(scale: ScaleClient) -> None:
         await scale.disconnect()
     except Exception:  # noqa: BLE001 - the scale may already be gone
         _LOGGER.debug("disconnect message not delivered", exc_info=True)
+
+
+async def setup_session(session: WppConversation) -> ProbeReply | None:
+    """Run a setup-mode session to completion: subscribe, PROBE, SYNC_OK, SETUP_OK, DISCONNECT.
+
+    Subscribing is what makes BlueZ pair with a Body+ (the scale refuses the subscription until
+    the link is encrypted), so this is the Body+ pairing step. Nothing is read or changed.
+    Returns the PROBE reply when the scale was in setup mode, None when it asked for
+    authentication instead (not in setup mode: the bond still forms, the session just ends).
+    """
+    await session.start()
+    scale = ScaleClient(session)
+    answers = {Cmd.PROBE, Cmd.PROBE_CHALLENGE}
+    (reply,) = await session.request(probe(), expect=answers)
+    if reply.base_command != Cmd.PROBE:
+        await _say_goodbye(scale)
+        return None
+    for step in (scale.sync_ok, scale.setup_ok):
+        try:
+            await step()
+        except (WppCommandError, TimeoutError):
+            _LOGGER.debug("%s not acknowledged", step.__name__, exc_info=True)
+    await _say_goodbye(scale)
+    return _probe_reply(reply)

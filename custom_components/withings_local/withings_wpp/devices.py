@@ -5,7 +5,8 @@ profile only records the differences. Body (WBS06) isn't here: it speaks WPP ove
 RFCOMM, not GATT.
 
 The Body Comp profile comes from a community report (issue #5, one WBS12, tested with BlueZ and
-Home Assistant).
+Home Assistant). The Body+ profile follows openwithings (github.com/totruok/openwithings), which
+documents a WBS05 (firmware 1651) end to end over BlueZ.
 """
 
 from __future__ import annotations
@@ -50,7 +51,17 @@ BODY_COMP = DeviceProfile(
     sync_ok=False,
 )
 
-PROFILES = {p.model_id: p for p in (BODY_SMART, BODY_COMP)}
+BODY_PLUS = DeviceProfile(
+    model_id=0x0005,
+    name="Body+",
+    model_code="WBS05",
+    # Service `00000020-5749-5448-0005-…`, WPP on characteristic `00000024-5749-5448-0005-…`.
+    is_wpp_characteristic=lambda uuid: uuid.startswith("00000024") and WITH_MARKER in uuid,
+    # openwithings: always send SYNC_OK, or the scale ignores the next connection.
+    sync_ok=True,
+)
+
+PROFILES = {p.model_id: p for p in (BODY_SMART, BODY_COMP, BODY_PLUS)}
 
 
 def model_ids(service_uuids, service_data: dict) -> set[int]:

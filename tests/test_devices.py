@@ -24,3 +24,17 @@ def test_wpp_characteristic_per_profile():
 
 def test_sync_ok_only_where_known():
     assert BODY_SMART.sync_ok and not BODY_COMP.sync_ok
+
+
+BODY_PLUS_WPP = "00000024-5749-5448-0005-000000000000"
+
+
+def test_body_plus_profile():
+    from withings_wpp.devices import BODY_PLUS
+
+    assert profile_for(["00000020-5749-5448-0005-001122334455"], {}) is BODY_PLUS
+    assert profile_for(["00000020-5749-5448-0005-000000000000"], {}) is BODY_PLUS  # setup mode
+    assert profile_for([], {}, "Body+ 7E") is BODY_PLUS
+    assert BODY_PLUS.is_wpp_characteristic(BODY_PLUS_WPP)
+    assert not BODY_PLUS.is_wpp_characteristic(NEW_WPP)
+    assert BODY_PLUS.sync_ok and BODY_PLUS.model_code == "WBS05"

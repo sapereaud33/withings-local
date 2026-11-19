@@ -8,6 +8,10 @@
     },
     {
       "connectable": true,
+      "local_name": "Body+*"
+    },
+    {
+      "connectable": true,
       "local_name": "Body Smart*"
     },
     {
@@ -26,14 +30,14 @@
   "dependencies": [
     "bluetooth_adapters"
   ],
-  "documentation": "https://github.com/pierosavi/withings-local",
+  "documentation": "https://github.com/sapereaud33/withings-local",
   "integration_type": "device",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/pierosavi/withings-local/issues",
+  "issue_tracker": "https://github.com/sapereaud33/withings-local/issues",
   "loggers": [
     "custom_components.withings_local",
     "bleak_retry_connector"
   ],
   "requirements": [],
-  "version": "0.5.0"
+  "version": "0.5.0.post1"
 }

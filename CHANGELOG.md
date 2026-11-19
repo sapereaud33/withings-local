@@ -2,6 +2,19 @@
 
 Notable changes to the Withings Local integration. Versions follow [semantic versioning](https://semver.org); each one is a GitHub release that HACS offers as an update.
 
+## [0.5.0.post1] - 2026-11-19
+
+Fork (sapereaud33/withings-local) adding the Body+.
+
+### Added
+
+- Body+ (WBS05) support, following openwithings' protocol notes: discovery by its `…5749-5448-0005-…`
+  service UUID (or a `Body+` name), weigh-in detection from the MAC in the UUID tail, the same WPP
+  session as the Body Smart (SYNC_OK included), and Just Works pairing. The pairing step registers a
+  temporary agent that only accepts this scale, makes the adapter bondable for the attempt, and runs a
+  setup-mode session (PROBE, SYNC_OK, SETUP_OK, DISCONNECT): the scale only pairs when security is
+  raised in reaction to its refusal of the first subscription, not on `Pair()`.
+
 ## [Unreleased]
 
 ## [0.5.0] - 2026-11-06

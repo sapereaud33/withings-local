@@ -29,6 +29,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     BODY_COMP_MODEL_ID,
     BODY_MODEL_ID,
+    BODY_PLUS_MODEL_ID,
     BODY_SMART_MODEL_ID,
     CONF_KL,
     CONF_MODEL_ID,
@@ -97,7 +98,9 @@ def has_new_data(service_info: BluetoothServiceInfoBleak, model_id: int = BODY_S
     """True when the scale advertises as an installed device (after a weigh-in).
 
     Body Comp only advertises FD77 service data: it has new data when its flags say installed
-    and sync requested. Body Smart has two signals, because passive scanners may not receive the
+    and sync requested. Body+ puts its MAC in the service UUID tail after a weigh-in (zeros in
+    setup mode); that is the only signal used for it, since what its manufacturer data means in
+    setup mode is unknown. Body Smart has two signals, because passive scanners may not receive the
     scan response:
     - the service UUID tail carries the scale's MAC (all zeros in setup/button sessions);
     - the Withings manufacturer data is non-zero (all zeros in setup sessions).
@@ -107,8 +110,10 @@ def has_new_data(service_info: BluetoothServiceInfoBleak, model_id: int = BODY_S
         return fd is not None and fd.wants_connection
     for uuid in service_info.service_uuids:
         w = WithingsUuid.parse(uuid)
-        if w and w.model_id == BODY_SMART_MODEL_ID and w.tail.strip("0"):
+        if w and w.model_id == model_id and w.tail.strip("0"):
             return True
+    if model_id == BODY_PLUS_MODEL_ID:
+        return False
     mfr = service_info.manufacturer_data.get(WITHINGS_COMPANY_ID)
     return bool(mfr) and any(mfr)
 

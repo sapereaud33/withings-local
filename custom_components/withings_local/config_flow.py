@@ -22,9 +22,10 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.selector import TextSelector, TextSelectorConfig, TextSelectorType
 
-from .const import BODY_COMP_MODEL_ID, BODY_MODEL_ID, BODY_SMART_MODEL_ID, CONF_KL, CONF_MODEL_ID, CONF_USERS, DOMAIN, LOCAL_NAME_PREFIX, SUPPORTED_MODELS
+from .const import BODY_COMP_MODEL_ID, BODY_MODEL_ID, BODY_PLUS_MODEL_ID, BODY_SMART_MODEL_ID, CONF_KL, CONF_MODEL_ID, CONF_USERS, DOMAIN, LOCAL_NAME_PREFIX, SUPPORTED_MODELS
 from .classic_pairing import ClassicPairingSession
 from .coordinator import is_setup_mode
+from .le_pairing import BodyPlusPairing
 from .pairing import PairingFailed, PairingSession, PairingUnsupported, device_path
 
 # How long to wait for the scale to advertise after the user holds its button.
@@ -55,6 +56,8 @@ def scale_model_id(info: BluetoothServiceInfoBleak) -> int | None:
         return BODY_SMART_MODEL_ID
     if info.name and info.name.startswith(SUPPORTED_MODELS[BODY_COMP_MODEL_ID][0]):
         return BODY_COMP_MODEL_ID
+    if info.name and info.name.startswith("Body+"):
+        return BODY_PLUS_MODEL_ID
     return None
 
 
@@ -266,6 +269,14 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             if self._model_id == BODY_MODEL_ID
             else (
                 "1. Choose *Pair now*.\n"
+                "2. **Hold the button under the scale for 3 seconds** until it shows 'Start app' "
+                "(setup mode). Home Assistant pairs without a code.\n\n"
+                "Keep your phone's Bluetooth off (or the Withings app closed) while pairing, "
+                "so the app doesn't take the connection first."
+            )
+            if self._model_id == BODY_PLUS_MODEL_ID
+            else (
+                "1. Choose *Pair now*.\n"
                 "2. **Press the button under the scale briefly.** The scale shows a 6-digit code, "
                 "which you'll enter next.\n\n"
                 "The scale may show 'Setup failed' afterward. That's harmless."
@@ -295,6 +306,7 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
                 progress_action={
                     BODY_MODEL_ID: "wait_for_scale_wbs06",
                     BODY_COMP_MODEL_ID: "wait_for_scale_body_comp",
+                    BODY_PLUS_MODEL_ID: "wait_for_scale_body_plus",
                 }.get(self._model_id, "wait_for_scale"),
                 progress_task=self._pair_task,
             )
@@ -334,6 +346,11 @@ class WithingsLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             # This method handles adapter state and agent cleanup itself.
             await ClassicPairingSession(device_path(self.hass, service_info)).pair()
             _LOGGER.info("%s: Classic Bluetooth bond confirmed", self._name)
+            return True
+        if self._model_id == BODY_PLUS_MODEL_ID:
+            # Just Works, triggered by the first GATT subscription (not by Pair()).
+            already = await BodyPlusPairing(self.hass, device_path(self.hass, service_info), service_info).pair()
+            _LOGGER.info("%s: %s", self._name, "already paired" if already else "paired")
             return True
         self._pairing = PairingSession(
             device_path(self.hass, service_info)
