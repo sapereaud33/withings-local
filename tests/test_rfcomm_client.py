@@ -182,37 +182,26 @@ async def test_rfcomm_uses_verified_wpp_authentication_before_reading(knows_key:
         await asyncio.gather(task, return_exceptions=True)
 
 
-async def test_outgoing_link_sends_reset_when_the_device_does_not() -> None:
-    """Body+: we open the link; if the scale stays silent we send RESET and wait for its reply."""
-    from withings_wpp.client import OutgoingRfcommWppSession
+async def test_spp_session_speaks_plain_wpp() -> None:
+    """Body+ SPP: no FragFsm RESET or headers; replies may arrive split across reads."""
+    from withings_wpp.client import SppWppSession
 
     local, peer = socket.socketpair()
     local.setblocking(False)
     peer.setblocking(False)
     loop = asyncio.get_running_loop()
-    session = OutgoingRfcommWppSession(local, sync_ok=True)
+    session = SppWppSession(local, sync_ok=True)
     try:
-        start = asyncio.create_task(session.start())
-        assert await asyncio.wait_for(loop.sock_recv(peer, 16), 3) == b"\x01\x00"
-        await loop.sock_sendall(peer, b"\x01\x00")
-        await asyncio.wait_for(start, 2)
-        assert session.tx_bytes == 2
-    finally:
-        await session.close()
-        peer.close()
-
-
-async def test_outgoing_link_uses_the_device_reset() -> None:
-    from withings_wpp.client import OutgoingRfcommWppSession
-
-    local, peer = socket.socketpair()
-    local.setblocking(False)
-    peer.setblocking(False)
-    session = OutgoingRfcommWppSession(local, sync_ok=True)
-    try:
-        await asyncio.get_running_loop().sock_sendall(peer, b"\x01\x00")
-        await asyncio.wait_for(session.start(), 2)
-        assert session.tx_bytes == 0  # we didn't need to send our own RESET
+        await asyncio.wait_for(session.start(), 1)
+        request = asyncio.create_task(ScaleClient(session).battery())
+        data = await asyncio.wait_for(loop.sock_recv(peer, 128), 1)
+        assert decode_message(data).command == Cmd.BATTERY_PERCENT  # unwrapped
+        reply = Message(Cmd.BATTERY_PERCENT, (Tlv(Obj.BATTERY_PERCENT, struct.pack(">H", 81)),)).encode()
+        await loop.sock_sendall(peer, reply[:3])
+        await asyncio.sleep(0.01)
+        await loop.sock_sendall(peer, reply[3:])
+        assert await asyncio.wait_for(request, 1) == 81
+        assert session.tx_bytes == len(data)
     finally:
         await session.close()
         peer.close()

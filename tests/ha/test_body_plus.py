@@ -95,13 +95,13 @@ async def test_weigh_in_syncs_over_classic_spp(hass: HomeAssistant, mock_bluetoo
     with (
         patch("custom_components.withings_local.coordinator.open_spp", AsyncMock(return_value=sock)) as spp,
         patch("custom_components.withings_local.coordinator.read_measurements", AsyncMock(return_value=result)) as read,
-        patch("custom_components.withings_local.coordinator.OutgoingRfcommWppSession") as session_cls,
+        patch("custom_components.withings_local.coordinator.SppWppSession") as session_cls,
     ):
         session_cls.return_value.close = AsyncMock()
         data = await coordinator._async_sync(body_plus())  # noqa: SLF001
     spp.assert_awaited_once_with("/org/bluez/hci0/dev_00_24_E4_00_00_2B")
     session_cls.assert_called_once_with(sock, sync_ok=True)
-    assert read.await_args.kwargs["app_version"] == 8050004
+    assert "app_version" not in read.await_args.kwargs  # the phone app's current version (default)
     assert data.users[1001].values["weight"] == 80.5
 
 

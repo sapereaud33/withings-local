@@ -13,7 +13,7 @@ import time
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 from .withings_wpp.advertisement import FD77, Fd77, WithingsUuid
 from .withings_wpp.client import (
-    OutgoingRfcommWppSession,
+    SppWppSession,
     RfcommWppSession,
     SyncResult,
     WppSession,
@@ -381,21 +381,19 @@ class WithingsScaleCoordinator(ActiveBluetoothDataUpdateCoordinator[ScaleData]):
         return self._merge_result(result)
 
     async def _async_sync_spp(self, service_info: BluetoothServiceInfoBleak) -> ScaleData:
-        """Body+: open the scale's Classic serial port and run the WPP read over FragFsm."""
+        """Body+: open the scale's Classic serial port and run a plain WPP read."""
         _LOGGER.info("%s: weigh-in advertised, connecting over Classic Bluetooth", self.title)
         started = time.monotonic()
         step = "connecting"
-        session: OutgoingRfcommWppSession | None = None
+        session: SppWppSession | None = None
         try:
             sock = await open_spp(classic_device_path(self.hass, service_info))
             step = "reading"
             _LOGGER.debug("%s: RFCOMM connected after %.1fs", self.title, time.monotonic() - started)
-            session = OutgoingRfcommWppSession(sock, sync_ok=True)
+            session = SppWppSession(sock, sync_ok=True)
             async with asyncio.timeout(SESSION_TIMEOUT_SECONDS):
                 result = await read_measurements(
-                    None, self._kl, session,
-                    app_version=WBS06_RFCOMM_APP_VERSION,
-                    authentication_timeout=WBS06_RFCOMM_AUTH_TIMEOUT,
+                    None, self._kl, session, authentication_timeout=WBS06_RFCOMM_AUTH_TIMEOUT,
                 )
         except Exception as err:
             traffic = (
