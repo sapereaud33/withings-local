@@ -8,14 +8,19 @@ Fork (sapereaud33/withings-local) adding the Body+.
 
 ### Added
 
-- Body+ (WBS05) support. On the tested scale the openwithings GATT route is impossible: it never
-  sends a connectable LE advertisement (only ADV_SCAN_IND, in setup mode and after weigh-ins). It
-  does accept Classic connections and publishes SPP, iAP2 and Withings SDP records. So after a
-  weigh-in advertisement (MAC in the `…5749-5448-0005-…` UUID tail) Home Assistant opens the SPP
-  channel through a BlueZ client Profile1 (`spp.py`) and runs WPP over FragFsm, sending the
-  FragFsm RESET itself when the scale doesn't, with the WBS06 RFCOMM app version and SYNC_OK.
-  Pairing bonds the Classic bearer (Just Works) with the WBS06 routine. Not yet confirmed on
-  hardware past the SDP lookup.
+- Body+ (WBS05) support over Classic Bluetooth, confirmed on hardware (2026-11-19). The tested
+  scale never sends a connectable LE advertisement, so the openwithings GATT route is impossible.
+  - After a weigh-in the scale connects to the host and looks up the same RFCOMM service as the
+    WBS06 (`00000001-e1ba-…`, plus `00009994`), served by the shared RFCOMM listener; WPP runs
+    over FragFsm. Home Assistant waits 20 s for this before paging the scale: paging at the
+    same time leaves both sides busy (HCI 0x0d, Limited Resources).
+  - Woken with the button (setup mode), the scale doesn't call: Home Assistant opens its SPP
+    channel (BlueZ client Profile1, `spp.py`), waits for the scale's FragFsm RESET and runs the
+    phone app's setup sequence: TIME_SET, read stored measurements, SYNC_OK, SETUP_OK.
+  - A scale that lost its `kl` (battery change) answers PROBE without a challenge. Such sessions
+    are accepted only when the ACL link is authenticated and encrypted with the Classic bond
+    (checked with HCIGETCONNINFO), which only the bonded scale can open.
+  - Pairing bonds the Classic bearer (Just Works) with the WBS06 routine.
 
 ## [Unreleased]
 
